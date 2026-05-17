@@ -476,11 +476,43 @@ async function checkSite(id) {
 
   const {fb, ga, gtm, ads} = getPxVals();
   const map = { meta: fb, ga4: ga, gtm: gtm, ads: ads };
+  const GH_USER = 'pedropiresimoveisbr-ctrl';
 
   try {
-    const resp = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(site.url), { signal: AbortSignal.timeout(14000) });
-    if (!resp.ok) throw new Error('proxy retornou ' + resp.status);
-    const html = (await resp.json()).contents || '';
+    let html = '';
+
+    // 1) GitHub raw — mais confiável, sem CORS, sem bloqueio do Vercel
+    if (site.repo) {
+      const repoName = site.repo
+        .replace(/.*github\.com\/[^/]+\//, '')
+        .replace(/\.git$/, '')
+        .trim();
+      const candidates = [
+        `https://raw.githubusercontent.com/${GH_USER}/${repoName}/main/public/index.html`,
+        `https://raw.githubusercontent.com/${GH_USER}/${repoName}/main/index.html`,
+        `https://raw.githubusercontent.com/${GH_USER}/${repoName}/master/public/index.html`,
+        `https://raw.githubusercontent.com/${GH_USER}/${repoName}/master/index.html`,
+      ];
+      for (const url of candidates) {
+        try {
+          const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+          if (r.ok) { html = await r.text(); break; }
+        } catch(e) { continue; }
+      }
+    }
+
+    // 2) Fallback: proxies CORS
+    if (!html) {
+      const proxies = [
+        () => fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(site.url), { signal: AbortSignal.timeout(14000) }).then(r => r.ok ? r.text() : Promise.reject()),
+        () => fetch('https://corsproxy.io/?' + encodeURIComponent(site.url), { signal: AbortSignal.timeout(14000) }).then(r => r.ok ? r.text() : Promise.reject()),
+      ];
+      for (const proxy of proxies) {
+        try { html = await proxy(); if (html) break; } catch(e) { continue; }
+      }
+    }
+
+    if (!html) throw new Error('não foi possível buscar o HTML');
 
     let allOk = true;
     const res = {};
